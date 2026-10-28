@@ -282,3 +282,17 @@ if "results" in st.session_state:
 
 st.divider()
 st.caption("Veri kaynağı: Binance USDⓈ-M Futures public market-data endpoints. Gecikme, rate limit ve bağlantı hataları olabilir. Bu bir yatırım tavsiyesi değildir.")
+
+st.divider()
+st.subheader("Binance bağlantı testi")
+
+if st.button("Bağlantıyı test et"):
+    try:
+        response = requests.get(
+            "https://fapi.binance.com/fapi/v1/exchangeInfo",
+            timeout=15
+        )
+        st.write("HTTP durum kodu:", response.status_code)
+        st.write("Yanıtın ilk 300 karakteri:", response.text[:300])
+    except Exception as e:
+        st.error(str(e))
