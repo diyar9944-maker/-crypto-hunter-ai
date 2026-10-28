@@ -26,9 +26,25 @@ with st.sidebar:
 
 @st.cache_data(ttl=60, show_spinner=False)
 def get_json(path, params=None):
-    response = requests.get(BASE + path, params=params, timeout=TIMEOUT)
-    response.raise_for_status()
-    return response.json()
+    errors = []
+
+    for base in BASES:
+        try:
+            response = requests.get(
+                base + path,
+                params=params,
+                timeout=TIMEOUT
+            )
+            response.raise_for_status()
+            return response.json()
+
+        except requests.RequestException as exc:
+            errors.append(f"{base}: {exc}")
+
+    raise RuntimeError(
+        "Binance veri kaynaklarına erişilemedi:\n"
+        + "\n".join(errors)
+    )
 
 def get_universe(limit):
     info = get_json("/fapi/v1/exchangeInfo")
