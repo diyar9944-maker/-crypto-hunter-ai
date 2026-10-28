@@ -5,7 +5,13 @@ import numpy as np
 import streamlit as st
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-BASE = "https://fapi.binance.com"
+BASES = [
+    "https://fapi.binance.com",
+    "https://fapi1.binance.com",
+    "https://fapi2.binance.com",
+    "https://fapi3.binance.com",
+    "https://fapi4.binance.com",
+]
 INTERVALS = {"15m": "Scalping", "1h": "Gün içi", "4h": "Swing", "1d": "Ana trend"}
 TIMEOUT = 12
 
