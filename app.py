@@ -12,8 +12,18 @@ BASES = [
     "https://fapi3.binance.com",
     "https://fapi4.binance.com",
 ]
-INTERVALS = {"15m": "Scalping", "1h": "Gün içi", "4h": "Swing", "1d": "Ana trend"}
+
+
+INTERVALS = {
+    "15m": "15 Dakika",
+    "1h": "1 Saat",
+    "4h": "4 Saat",
+    "1d": "Günlük",
+    "1w": "Haftalık"
+}
+
 TIMEOUT = 12
+
 
 st.set_page_config(page_title="Crypto Hunter AI", page_icon="📈", layout="wide")
 st.title("📈 Crypto Hunter AI")
@@ -23,12 +33,35 @@ st.info(
     "Bu ilk sürüm bir analiz prototipidir. Sinyaller garanti değildir; gerçek para ile işlem açmadan önce "
     "test edin. Bu uygulama Binance hesabınıza bağlanmaz ve emir göndermez."
 )
-
 with st.sidebar:
     st.header("Tarama ayarları")
-    coin_count = st.slider("Taranacak altcoin sayısı", min_value=5, max_value=30, value=15)
-    min_score = st.slider("En düşük sinyal puanı", min_value=40, max_value=90, value=65, step=5)
-    st.caption("Likiditesi yüksek USDT sürekli vadeli altcoinler taranır. BTC ve ETH liste dışıdır.")
+
+    coin_count = st.slider(
+        "Taranacak altcoin sayısı",
+        min_value=5,
+        max_value=30,
+        value=15
+    )
+
+    min_score = st.slider(
+        "En düşük sinyal puanı",
+        min_value=40,
+        max_value=90,
+        value=65,
+        step=5
+    )
+
+    selected_interval = st.radio(
+        "📊 Analiz zaman dilimi",
+        options=["15m", "1h", "4h", "1d", "1w"],
+        format_func=lambda x: INTERVALS[x],
+        index=0
+    )
+
+    st.caption(
+        "Seçtiğin zaman dilimine göre analiz yapılacak. "
+        "BTC ve ETH tarama dışında tutulur."
+    )
 
 @st.cache_data(ttl=60, show_spinner=False)
 def get_json(path, params=None):
@@ -172,48 +205,74 @@ def timeframe_score(df):
 
 def analyze_symbol(item):
     symbol = item["symbol"]
-    frames = {}
-    reasons = []
-    total = 0
-    latest = None
-    for interval, weight in [("1d", 3), ("4h", 2), ("1h", 2), ("15m", 1)]:
-        df = candles(symbol, interval, 220)
-        s, r, why, full = timeframe_score(df)
-        total += s * weight
-        frames[interval] = {"score": s, "row": r}
-        if interval == "15m":
-            latest = r
-        if interval in ("1d", "4h"):
-            reasons.extend([f"{interval}: {x}" for x in why[:2]])
+
+    # Yalnızca kullanıcının seçtiği zaman dilimini analiz et.
+    df = candles(symbol, selected_interval, 220)
+    score, latest, reasons, full = timeframe_score(df)
+
+    price = float(latest["close"])
+
+    if pd.notna(latest["atr"]):
+        atr = float(latest["atr"])
+    else:
+        atr = price * 0.02
+
+    # Funding ve Open Interest bilgileri mevcut Binance veri kaynağından alınır.
     premium = get_json("/fapi/v1/premiumIndex", {"symbol": symbol})
     oi = get_json("/fapi/v1/openInterest", {"symbol": symbol})
+
     funding = float(premium.get("lastFundingRate", 0))
-    price = float(latest["close"])
-    atr = float(latest["atr"]) if pd.notna(latest["atr"]) else price * 0.02
-    # Funding is a context flag, not a directional signal by itself.
-    funding_note = "Funding pozitif" if funding > 0 else ("Funding negatif" if funding < 0 else "Funding sıfıra yakın")
-    # Score normalized to an approximate 0-100 display, not a probability.
-    max_abs = 3*6 + 2*6 + 2*6 + 1*6
-    confidence = int(max(0, min(100, 50 + 50 * total / max_abs)))
-    if total >= 5:
+    open_interest = float(oi.get("openInterest", 0))
+
+    funding_note = (
+        "Funding pozitif" if funding > 0
+        else "Funding negatif" if funding < 0
+        else "Funding sıfıra yakın"
+    )
+
+    # Puan 0-100 arasında gösterilir; kazanma olasılığı değildir.
+    confidence = int(max(0, min(100, 50 + (score / 6) * 50)))
+
+    if score >= 3:
         direction = "LONG adayı"
         stop = price - 1.5 * atr
-        tp1, tp2, tp3 = price + 1.5*atr, price + 2.5*atr, price + 3.5*atr
-    elif total <= -5:
+        tp1 = price + 1.5 * atr
+        tp2 = price + 2.5 * atr
+        tp3 = price + 3.5 * atr
+
+    elif score <= -3:
         direction = "SHORT adayı"
         stop = price + 1.5 * atr
-        tp1, tp2, tp3 = price - 1.5*atr, price - 2.5*atr, price - 3.5*atr
+        tp1 = price - 1.5 * atr
+        tp2 = price - 2.5 * atr
+        tp3 = price - 3.5 * atr
+
     else:
         direction = "NÖTR / BEKLE"
-        stop = tp1 = tp2 = tp3 = np.nan
+        stop = np.nan
+        tp1 = np.nan
+        tp2 = np.nan
+        tp3 = np.nan
+
     return {
-        "Coin": symbol, "Yön": direction, "Analiz puanı": confidence,
-        "Fiyat": price, "24s %": item["change24h"], "24s hacim (USDT)": item["quoteVolume"],
-        "RSI 15m": float(latest["rsi"]) if pd.notna(latest["rsi"]) else np.nan,
-        "Funding": funding, "Open Interest": float(oi.get("openInterest", 0)),
-        "Giriş referansı": price, "Stop (ATR)": stop, "TP1": tp1, "TP2": tp2, "TP3": tp3,
+        "Coin": symbol,
+        "Yön": direction,
+        "Analiz puanı": confidence,
+        "Zaman dilimi": INTERVALS[selected_interval],
+        "Fiyat": price,
+        "24s %": item["change24h"],
+        "24s hacim (USDT)": item["quoteVolume"],
+        "RSI": float(latest["rsi"]) if pd.notna(latest["rsi"]) else np.nan,
+        "ATR": atr,
+        "Funding": funding,
+        "Open Interest": open_interest,
+        "Giriş referansı": price,
+        "Stop (ATR)": stop,
+        "TP1": tp1,
+        "TP2": tp2,
+        "TP3": tp3,
         "Detay": " • ".join(reasons[:5] + [funding_note]),
-        "_rawscore": total
+        "_rawscore": score
     }
 
 def fmt_price(x):
@@ -259,10 +318,10 @@ if "results" in st.session_state:
         st.warning("Seçilen puan eşiğini geçen aday yok. Bu, işlem açmamak için de geçerli bir sonuçtur.")
     else:
         display = df.copy()
-        for col in ["Fiyat", "Giriş referansı", "Stop (ATR)", "TP1", "TP2", "TP3"]:
+        for col in ["Fiyat", "Giriş referansı", "ATR", "Stop (ATR)", "TP1", "TP2", "TP3"]:
             display[col] = display[col].map(fmt_price)
         display["24s %"] = display["24s %"].map(lambda x: f"{x:.2f}%")
-        display["RSI 15m"] = display["RSI 15m"].map(lambda x: f"{x:.1f}" if pd.notna(x) else "—")
+        display["RSI"] = display["RSI"].map(lambda x: f"{x:.1f}" if pd.notna(x) else "—")
         display["Funding"] = display["Funding"].map(lambda x: f"{x*100:.4f}%")
         display["24s hacim (USDT)"] = display["24s hacim (USDT)"].map(lambda x: f"{x:,.0f}")
         display["Open Interest"] = display["Open Interest"].map(lambda x: f"{x:,.2f}")
@@ -279,9 +338,6 @@ if "results" in st.session_state:
     if st.session_state.get("errors"):
         with st.expander(f"Veri alınamayan coinler ({len(st.session_state['errors'])})"):
             st.write("\n".join(st.session_state["errors"]))
-
-st.divider()
-st.caption("Veri kaynağı: Binance USDⓈ-M Futures public market-data endpoints. Gecikme, rate limit ve bağlantı hataları olabilir. Bu bir yatırım tavsiyesi değildir.")
 
 st.divider()
 st.subheader("Binance bağlantı testi")
